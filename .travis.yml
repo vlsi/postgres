@@ -1,6 +1,8 @@
 sudo: required
 language: java
 dist: trusty
+services:
+  - postgresql
 
 before_script:
   - ./.travis/make_postgres.sh
