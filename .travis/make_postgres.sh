@@ -9,3 +9,7 @@ PREFIX=$HOME/pg_head
 
 # Build PostgreSQL from source and start the DB
 make && make install && $PREFIX/bin/pg_ctl -D $PREFIX/data initdb && $PREFIX/bin/pg_ctl -D $PREFIX/data -l postgres.log start
+
+sleep 10
+
+cat postgres.log
