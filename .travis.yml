@@ -1,0 +1,43 @@
+sudo: false
+language: java
+
+before_script:
+  - ./.travis/make_postgres.sh
+  - psql -U postgres -c "create user test with password 'test';"
+  - psql -c 'create database test owner test;' -U postgres
+  - echo "MAVEN_OPTS='-Xmx1g -Dgpg.skip=true'" > ~/.mavenrc
+  - psql test -c 'CREATE EXTENSION hstore;' -U postgres
+
+script:
+  # make sure previous build artifacts are not used for subsequent builds
+  - ./.travis/travis_build.sh
+
+before_cache:
+  # No sense in caching current build artifacts
+  rm -rf $HOME/.m2/repository/org/postgresql
+
+# Skip default "mvn install" issued by Travis
+# Root project cannot be compiled with older JDKs, so it makes sense to just skip the step
+install: true
+
+cache:
+  directories:
+    - '$HOME/.m2/repository'
+
+matrix:
+  fast_finish: true
+  include:
+    - env:
+        - TEST=PG_CHECK
+      script: make check
+    - env:
+        - TEST=PG_CHECK_WORLD
+      script: PGHOST=localhost make check-world
+    - jdk: oraclejdk8
+      env:
+        - TEST=pgjdbc
+      script: ./.travis/pgjdbc_check.sh
+
+branches:
+  only:
+    - travis
