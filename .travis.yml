@@ -4,7 +4,7 @@ dist: trusty
 
 before_script:
   - ./.travis/make_postgres.sh
-  - psql -U postgres -c "create user test with password 'test';"
+  - psql -U postgres -c "create user test with password 'test'; select version();"
   - psql -c 'create database test owner test;' -U postgres
   - echo "MAVEN_OPTS='-Xmx1g -Dgpg.skip=true'" > ~/.mavenrc
   - psql test -c 'CREATE EXTENSION hstore;' -U postgres

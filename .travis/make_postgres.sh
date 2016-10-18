@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -x -e
 
+sudo service postgresql stop
+
 PREFIX=$HOME/pg_head
 
 ./configure --prefix=$PREFIX
