@@ -1,5 +1,6 @@
-sudo: false
+sudo: required
 language: java
+dist: trusty
 
 before_script:
   - ./.travis/make_postgres.sh
