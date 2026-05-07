@@ -1,0 +1,4 @@
+comment = 'Test code for has_seqscan tie-breaker in add_path()'
+default_version = '1.0'
+module_pathname = '$libdir/test_seqscan_tiebreak'
+relocatable = true

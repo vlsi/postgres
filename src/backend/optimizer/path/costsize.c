@@ -334,6 +334,7 @@ cost_seqscan(Path *path, PlannerInfo *root,
 
 	path->disabled_nodes =
 		(baserel->pgs_mask & enable_mask) == enable_mask ? 0 : 1;
+	path->has_seqscan = true;
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + cpu_run_cost + disk_run_cost;
 }
@@ -452,6 +453,7 @@ cost_gather(GatherPath *path, PlannerInfo *root,
 
 	path->path.disabled_nodes = path->subpath->disabled_nodes
 		+ ((rel->pgs_mask & PGS_GATHER) != 0 ? 0 : 1);
+	path->path.has_seqscan = path->subpath->has_seqscan;
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = (startup_cost + run_cost);
 }
@@ -519,6 +521,7 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 
 	path->path.disabled_nodes = path->subpath->disabled_nodes
 		+ ((rel->pgs_mask & PGS_GATHER_MERGE) != 0 ? 0 : 1);
+	path->path.has_seqscan = path->subpath->has_seqscan;
 	path->path.startup_cost = startup_cost + input_startup_cost;
 	path->path.total_cost = (startup_cost + run_cost + input_total_cost);
 }
@@ -1519,6 +1522,7 @@ cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
 		enable_mask |= PGS_CONSIDER_NONPARTIAL;
 	path->path.disabled_nodes = path->subpath->disabled_nodes
 		+ (((baserel->pgs_mask & enable_mask) != enable_mask) ? 1 : 0);
+	path->path.has_seqscan = path->subpath->has_seqscan;
 	path->path.startup_cost = path->subpath->startup_cost;
 	path->path.total_cost = path->subpath->total_cost;
 
@@ -2350,6 +2354,7 @@ cost_append(AppendPath *apath, PlannerInfo *root)
 
 				apath->path.rows += subpath->rows;
 				apath->path.disabled_nodes += subpath->disabled_nodes;
+				apath->path.has_seqscan |= subpath->has_seqscan;
 				apath->path.total_cost += subpath->total_cost;
 			}
 		}
@@ -2427,6 +2432,7 @@ cost_append(AppendPath *apath, PlannerInfo *root)
 
 				apath->path.rows += subpath->rows;
 				apath->path.disabled_nodes += subpath->disabled_nodes;
+				apath->path.has_seqscan |= subpath->has_seqscan;
 				apath->path.startup_cost += subpath->startup_cost;
 				apath->path.total_cost += subpath->total_cost;
 			}
@@ -2476,6 +2482,7 @@ cost_append(AppendPath *apath, PlannerInfo *root)
 			}
 
 			apath->path.disabled_nodes += subpath->disabled_nodes;
+			apath->path.has_seqscan |= subpath->has_seqscan;
 			apath->path.rows = clamp_row_est(apath->path.rows);
 
 			i++;

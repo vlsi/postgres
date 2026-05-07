@@ -541,16 +541,18 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 								 * Same pathkeys and outer rels, and fuzzily
 								 * the same cost, so keep just one; to decide
 								 * which, first check parallel-safety, then
-								 * rows, then do a fuzzy cost comparison with
-								 * very small fuzz limit.  (We used to do an
-								 * exact cost comparison, but that results in
-								 * annoying platform-specific plan variations
-								 * due to roundoff in the cost estimates.)	If
-								 * things are still tied, arbitrarily keep
-								 * only the old path.  Notice that we will
-								 * keep only the old path even if the
-								 * less-fuzzy comparison decides the startup
-								 * and total costs compare differently.
+								 * rows, then prefer a path without a Seq
+								 * Scan over one with a Seq Scan, then do a
+								 * fuzzy cost comparison with very small fuzz
+								 * limit.  (We used to do an exact cost
+								 * comparison, but that results in annoying
+								 * platform-specific plan variations due to
+								 * roundoff in the cost estimates.)	If things
+								 * are still tied, arbitrarily keep only the
+								 * old path.  Notice that we will keep only
+								 * the old path even if the less-fuzzy
+								 * comparison decides the startup and total
+								 * costs compare differently.
 								 */
 								if (new_path->parallel_safe >
 									old_path->parallel_safe)
@@ -561,6 +563,12 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 								else if (new_path->rows < old_path->rows)
 									remove_old = true;	/* new dominates old */
 								else if (new_path->rows > old_path->rows)
+									accept_new = false; /* old dominates new */
+								else if (!new_path->has_seqscan &&
+										 old_path->has_seqscan)
+									remove_old = true;	/* new dominates old */
+								else if (new_path->has_seqscan &&
+										 !old_path->has_seqscan)
 									accept_new = false; /* old dominates new */
 								else if (compare_path_costs_fuzzily(new_path,
 																	old_path,
@@ -847,6 +855,10 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 				if (keyscmp == PATHKEYS_BETTER1)
 					remove_old = true;
 				else if (keyscmp == PATHKEYS_BETTER2)
+					accept_new = false;
+				else if (!new_path->has_seqscan && old_path->has_seqscan)
+					remove_old = true;
+				else if (new_path->has_seqscan && !old_path->has_seqscan)
 					accept_new = false;
 				else if (compare_path_costs_fuzzily(new_path, old_path,
 													1.0000000001) == COSTS_BETTER1)
@@ -1453,6 +1465,7 @@ create_append_path(PlannerInfo *root,
 		if (child->parallel_aware == parallel_aware)
 		{
 			pathnode->path.rows = child->rows;
+			pathnode->path.has_seqscan = child->has_seqscan;
 			pathnode->path.startup_cost = child->startup_cost;
 			pathnode->path.total_cost = child->total_cost;
 		}
@@ -1580,6 +1593,7 @@ create_merge_append_path(PlannerInfo *root,
 		pathnode->path.rows += subpath->rows;
 		pathnode->path.parallel_safe = pathnode->path.parallel_safe &&
 			subpath->parallel_safe;
+		pathnode->path.has_seqscan |= subpath->has_seqscan;
 
 		if (!pathkeys_count_contained_in(pathkeys, subpath->pathkeys,
 										 &presorted_keys))
@@ -1734,6 +1748,7 @@ create_material_path(RelOptInfo *rel, Path *subpath, bool enabled)
 				  subpath->total_cost,
 				  subpath->rows,
 				  subpath->pathtarget->width);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	return pathnode;
 }
@@ -1791,6 +1806,7 @@ create_memoize_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	 * is that the JoinPathExtraData's pgs_mask included PGS_NESTLOOP_MEMOIZE.
 	 */
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	/*
 	 * Add a small additional charge for caching the first entry.  All the
@@ -2425,6 +2441,8 @@ create_nestloop_path(PlannerInfo *root,
 	pathnode->jpath.joinrestrictinfo = restrict_clauses;
 
 	final_cost_nestloop(root, pathnode, workspace, extra);
+	pathnode->jpath.path.has_seqscan =
+		outer_path->has_seqscan || inner_path->has_seqscan;
 
 	return pathnode;
 }
@@ -2497,6 +2515,8 @@ create_mergejoin_path(PlannerInfo *root,
 	/* pathnode->materialize_inner will be set by final_cost_mergejoin */
 
 	final_cost_mergejoin(root, pathnode, workspace, extra);
+	pathnode->jpath.path.has_seqscan =
+		outer_path->has_seqscan || inner_path->has_seqscan;
 
 	return pathnode;
 }
@@ -2571,6 +2591,8 @@ create_hashjoin_path(PlannerInfo *root,
 	/* final_cost_hashjoin will fill in pathnode->num_batches */
 
 	final_cost_hashjoin(root, pathnode, workspace, extra);
+	pathnode->jpath.path.has_seqscan =
+		outer_path->has_seqscan || inner_path->has_seqscan;
 
 	return pathnode;
 }
@@ -2643,6 +2665,7 @@ create_projection_path(PlannerInfo *root,
 		 */
 		pathnode->path.rows = subpath->rows;
 		pathnode->path.disabled_nodes = subpath->disabled_nodes;
+		pathnode->path.has_seqscan = subpath->has_seqscan;
 		pathnode->path.startup_cost = subpath->startup_cost +
 			(target->cost.startup - oldtarget->cost.startup);
 		pathnode->path.total_cost = subpath->total_cost +
@@ -2660,6 +2683,7 @@ create_projection_path(PlannerInfo *root,
 		 */
 		pathnode->path.rows = subpath->rows;
 		pathnode->path.disabled_nodes = subpath->disabled_nodes;
+		pathnode->path.has_seqscan = subpath->has_seqscan;
 		pathnode->path.startup_cost = subpath->startup_cost +
 			target->cost.startup;
 		pathnode->path.total_cost = subpath->total_cost +
@@ -2828,6 +2852,7 @@ create_set_projection_path(PlannerInfo *root,
 	 * this estimate later.
 	 */
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 	pathnode->path.rows = subpath->rows * tlist_rows;
 	pathnode->path.startup_cost = subpath->startup_cost +
 		target->cost.startup;
@@ -2884,6 +2909,7 @@ create_incremental_sort_path(PlannerInfo *root,
 						  subpath->pathtarget->width,
 						  0.0,	/* XXX comparison_cost shouldn't be 0? */
 						  work_mem, limit_tuples);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	sort->nPresortedCols = presorted_keys;
 
@@ -2929,6 +2955,7 @@ create_sort_path(PlannerInfo *root,
 			  subpath->pathtarget->width,
 			  0.0,				/* XXX comparison_cost shouldn't be 0? */
 			  work_mem, limit_tuples);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	return pathnode;
 }
@@ -2979,6 +3006,7 @@ create_group_path(PlannerInfo *root,
 			   subpath->disabled_nodes,
 			   subpath->startup_cost, subpath->total_cost,
 			   subpath->rows);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;
@@ -3031,6 +3059,7 @@ create_unique_path(PlannerInfo *root,
 	 * an overestimate.)
 	 */
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 	pathnode->path.startup_cost = subpath->startup_cost;
 	pathnode->path.total_cost = subpath->total_cost +
 		cpu_operator_cost * subpath->rows * numCols;
@@ -3111,6 +3140,7 @@ create_agg_path(PlannerInfo *root,
 			 subpath->disabled_nodes,
 			 subpath->startup_cost, subpath->total_cost,
 			 subpath->rows, subpath->pathtarget->width);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;
@@ -3222,6 +3252,7 @@ create_groupingsets_path(PlannerInfo *root,
 					 subpath->total_cost,
 					 subpath->rows,
 					 subpath->pathtarget->width);
+			pathnode->path.has_seqscan = subpath->has_seqscan;
 			is_first = false;
 			if (!rollup->is_hashed)
 				is_first_sort = false;
@@ -3436,6 +3467,7 @@ create_windowagg_path(PlannerInfo *root,
 				   subpath->startup_cost,
 				   subpath->total_cost,
 				   subpath->rows);
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 
 	/* add tlist eval cost for each output row */
 	pathnode->path.startup_cost += target->cost.startup;
@@ -3503,6 +3535,8 @@ create_setop_path(PlannerInfo *root,
 	 */
 	pathnode->path.disabled_nodes =
 		leftpath->disabled_nodes + rightpath->disabled_nodes;
+	pathnode->path.has_seqscan =
+		leftpath->has_seqscan || rightpath->has_seqscan;
 	if (strategy == SETOP_SORTED)
 	{
 		/*
@@ -3613,6 +3647,8 @@ create_recursiveunion_path(PlannerInfo *root,
 	pathnode->numGroups = numGroups;
 
 	cost_recursive_union(&pathnode->path, leftpath, rightpath);
+	pathnode->path.has_seqscan =
+		leftpath->has_seqscan || rightpath->has_seqscan;
 
 	return pathnode;
 }
@@ -3659,6 +3695,7 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
 	 * cpu_tuple_cost per row.
 	 */
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 	pathnode->path.startup_cost = subpath->startup_cost;
 	pathnode->path.total_cost = subpath->total_cost +
 		cpu_tuple_cost * subpath->rows;
@@ -3733,6 +3770,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	 * to make it look better sometime.
 	 */
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 	pathnode->path.startup_cost = subpath->startup_cost;
 	pathnode->path.total_cost = subpath->total_cost;
 	if (returningLists != NIL)
@@ -3810,6 +3848,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.rows = subpath->rows;
 	pathnode->path.disabled_nodes = subpath->disabled_nodes;
+	pathnode->path.has_seqscan = subpath->has_seqscan;
 	pathnode->path.startup_cost = subpath->startup_cost;
 	pathnode->path.total_cost = subpath->total_cost;
 	pathnode->path.pathkeys = subpath->pathkeys;

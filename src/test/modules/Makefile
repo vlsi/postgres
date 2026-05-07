@@ -49,6 +49,7 @@ SUBDIRS = \
 		  test_resowner \
 		  test_rls_hooks \
 		  test_saslprep \
+		  test_seqscan_tiebreak \
 		  test_shmem \
 		  test_shm_mq \
 		  test_slru \
