@@ -1,15 +1,50 @@
 CREATE EXTENSION test_seqscan_tiebreak;
--- Seq Scan added first, then Index Scan: tie-breaker must drop Seq Scan.
+-- Direct unit test: Seq Scan added first, then Index Scan; tie-breaker
+-- must drop Seq Scan.
 SELECT test_seqscan_tiebreak(seqscan_first => true);
  test_seqscan_tiebreak 
 -----------------------
  IndexScan
 (1 row)
 
--- Index Scan added first, then Seq Scan: tie-breaker must reject Seq Scan.
+-- Direct unit test: reverse order; tie-breaker must reject the Seq Scan.
 SELECT test_seqscan_tiebreak(seqscan_first => false);
  test_seqscan_tiebreak 
 -----------------------
  IndexScan
 (1 row)
 
+-- End-to-end SQL scenario: a join whose cost is dominated by a large
+-- generate_series, so the inner scan of a small table contributes
+-- (almost) nothing to the total. With all cost GUCs zeroed, Seq Scan
+-- and Index Scan have identical costs, the same NIL pathkeys (hash
+-- index), and the same row estimate, so the has_seqscan tie-breaker
+-- decides between them. The expected plan picks Index Scan.
+CREATE TABLE seqscan_tiebreak_small (id int);
+INSERT INTO seqscan_tiebreak_small SELECT g FROM generate_series(1, 50) g;
+CREATE INDEX seqscan_tiebreak_small_hash
+  ON seqscan_tiebreak_small USING hash (id);
+ANALYZE seqscan_tiebreak_small;
+SET enable_bitmapscan = off;
+SET max_parallel_workers_per_gather = 0;
+SET cpu_tuple_cost = 0;
+SET cpu_index_tuple_cost = 0;
+SET cpu_operator_cost = 0;
+SET seq_page_cost = 0;
+SET random_page_cost = 0;
+EXPLAIN (COSTS OFF)
+SELECT *
+FROM generate_series(1, 1000000) g
+JOIN seqscan_tiebreak_small ON seqscan_tiebreak_small.id = g
+WHERE g = 25;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Nested Loop
+   ->  Function Scan on generate_series g
+         Filter: (g = 25)
+   ->  Index Scan using seqscan_tiebreak_small_hash on seqscan_tiebreak_small
+         Index Cond: (id = 25)
+(5 rows)
+
+RESET ALL;
+DROP TABLE seqscan_tiebreak_small;
